@@ -111,6 +111,7 @@ app.get('/api/debug/routes', (req, res) => {
             '/api/auth/login (POST)',
             '/api/auth/register (POST)',
             '/api/auth/check-legajo/:legajo',
+            '/api/auth/validate-session (GET)',
             '/api/inscripciones',
             '/api/inscripciones/verificar/:usuarioId/:clase',
             '/api/material/solicitudes',
@@ -148,6 +149,80 @@ app.get('/api/env-check', (req, res) => {
         MONGODB_URI_LOGS: process.env.MONGODB_URI_LOGS ? 'DEFINED' : 'NOT DEFINED',
         NODE_ENV: process.env.NODE_ENV || 'development'
     });
+});
+
+// ==================== ENDPOINT DE VALIDACIÓN DE SESIÓN ====================
+// GET - Validar que la sesión del usuario sigue siendo válida
+app.get('/api/auth/validate-session', async (req, res) => {
+    try {
+        const userId = req.headers['user-id'];
+        const clientLastUpdate = req.headers['last-password-change'];
+        
+        console.log('🔍 Validando sesión:', { userId, clientLastUpdate });
+        
+        if (!userId || !ObjectId.isValid(userId)) {
+            return res.json({ success: true, sessionValid: false });
+        }
+        
+        const db = await mongoDB.getDatabaseSafe('formulario');
+        
+        const usuario = await db.collection('usuarios').findOne(
+            { _id: new ObjectId(userId) },
+            { projection: { passwordLastUpdated: 1 } }
+        );
+        
+        if (!usuario) {
+            return res.json({ success: true, sessionValid: false });
+        }
+        
+        const serverLastUpdate = usuario.passwordLastUpdated;
+        
+        console.log('📊 Comparando fechas:', {
+            client: clientLastUpdate,
+            server: serverLastUpdate,
+            clientType: typeof clientLastUpdate,
+            serverType: typeof serverLastUpdate
+        });
+        
+        // Si el cliente NO tiene fecha (null, undefined, o string vacío)
+        if (!clientLastUpdate || clientLastUpdate === '' || clientLastUpdate === 'null') {
+            // Si el servidor tiene fecha, se la enviamos al cliente para que la actualice
+            if (serverLastUpdate) {
+                console.log('📤 Cliente sin fecha, enviando fecha del servidor');
+                return res.json({
+                    success: true,
+                    sessionValid: true,
+                    passwordLastUpdated: serverLastUpdate,
+                    needsUpdate: true
+                });
+            }
+            // Si ambos no tienen fecha, es válido
+            return res.json({ success: true, sessionValid: true });
+        }
+        
+        // Si el cliente tiene fecha pero el servidor no (caso raro)
+        if (!serverLastUpdate) {
+            console.log('⚠️ Servidor sin fecha, cliente tiene fecha - Asumiendo válido');
+            return res.json({ success: true, sessionValid: true });
+        }
+        
+        // Comparar fechas como strings ISO
+        const clientDateStr = new Date(clientLastUpdate).toISOString();
+        const serverDateStr = new Date(serverLastUpdate).toISOString();
+        const sessionValid = clientDateStr === serverDateStr;
+        
+        console.log('📊 Comparación final:', { clientDateStr, serverDateStr, sessionValid });
+        
+        res.json({
+            success: true,
+            sessionValid: sessionValid,
+            passwordLastUpdated: serverLastUpdate
+        });
+        
+    } catch (error) {
+        console.error('❌ Error validando sesión:', error);
+        res.json({ success: true, sessionValid: true });
+    }
 });
 
 // ==================== RUTAS DE AUTENTICACIÓN ====================
@@ -198,12 +273,16 @@ app.post('/api/auth/login', async (req, res) => {
         // Remover password de la respuesta
         const { password: _, ...usuarioSinPassword } = usuario;
         
+        // Obtener la fecha del último cambio de contraseña
+        const passwordLastUpdated = usuario.passwordLastUpdated || null;
+        
         res.json({ 
             success: true, 
             message: 'Login exitoso', 
             data: {
                 ...usuarioSinPassword,
-                needsMigration: needsMigration  // Indicar si necesita migración
+                needsMigration: needsMigration,
+                passwordLastUpdated: passwordLastUpdated
             }
         });
 
@@ -261,6 +340,7 @@ app.post('/api/auth/register', async (req, res) => {
         
         // Usar scrypt para hashear
         const hashedPassword = hashPasswordScrypt(password);
+        const ahora = new Date();
         
         // Crear nuevo usuario
         const nuevoUsuario = {
@@ -271,7 +351,8 @@ app.post('/api/auth/register', async (req, res) => {
             email,
             password: hashedPassword,
             role,
-            fechaRegistro: new Date()
+            fechaRegistro: ahora,
+            passwordLastUpdated: ahora
         };
         
         const result = await db.collection('usuarios').insertOne(nuevoUsuario);
@@ -1029,6 +1110,7 @@ app.post('/api/admin/usuarios', async (req, res) => {
         
         // Usar scrypt
         const hashedPassword = hashPasswordScrypt(password);
+        const ahora = new Date();
         
         const nuevoUsuario = {
             apellidoNombre,
@@ -1038,7 +1120,8 @@ app.post('/api/admin/usuarios', async (req, res) => {
             email,
             password: hashedPassword,
             role,
-            fechaRegistro: new Date()
+            fechaRegistro: ahora,
+            passwordLastUpdated: ahora
         };
         
         const result = await db.collection('usuarios').insertOne(nuevoUsuario);
@@ -1127,12 +1210,14 @@ app.put('/api/admin/usuarios/:id/password', async (req, res) => {
         
         // Usar scrypt
         const hashedPassword = hashPasswordScrypt(newPassword);
+        const ahora = new Date();
         
         const result = await db.collection('usuarios').updateOne(
             { _id: new ObjectId(id) },
             { $set: { 
                 password: hashedPassword,
-                fechaActualizacion: new Date()
+                passwordLastUpdated: ahora,
+                fechaActualizacion: ahora
             } }
         );
         
@@ -1143,9 +1228,11 @@ app.put('/api/admin/usuarios/:id/password', async (req, res) => {
             });
         }
         
+        // Devolver la nueva fecha para que el cliente la actualice
         res.json({ 
             success: true, 
-            message: 'Contraseña cambiada correctamente' 
+            message: 'Contraseña cambiada correctamente',
+            passwordLastUpdated: ahora.toISOString()
         });
         
     } catch (error) {
@@ -1698,6 +1785,7 @@ app.put('/api/usuarios/perfil', async (req, res) => {
             }
             // Usar scrypt para nueva contraseña
             updateData.password = hashPasswordScrypt(password);
+            updateData.passwordLastUpdated = new Date();
         }
         
         await db.collection('usuarios').updateOne(
@@ -1815,6 +1903,7 @@ app.post('/api/usuarios/migrar', async (req, res) => {
             }
             
             updateData.password = hashPasswordScrypt(passwordToHash);
+            updateData.passwordLastUpdated = new Date();
             console.log('✅ Contraseña migrada a scrypt');
         }
         
@@ -2716,7 +2805,7 @@ app.post('/api/reports', async (req, res) => {
             url: url || 'unknown',
             userAgent: userAgent || 'unknown',
             ip: ip,
-            estado: 'pendiente',  // pendiente, en_revision, resuelto, cerrado
+            estado: 'pendiente',
             fechaCreacion: new Date(),
             fechaActualizacion: new Date()
         };
@@ -2861,7 +2950,7 @@ app.get('/api/reports/:id', async (req, res) => {
                     _id: reporte.usuarioId 
                 });
                 if (userLogs && userLogs.logs) {
-                    browserLogs = userLogs.logs.slice(-100); // Últimos 100 logs
+                    browserLogs = userLogs.logs.slice(-100);
                 }
             } catch (e) {
                 console.warn('No se pudieron obtener logs del navegador:', e.message);
@@ -3027,13 +3116,21 @@ app.get('/api/init-db', async (req, res) => {
             { $set: { area: "Personal general del Sanatorio" } }
         );
         console.log(`✅ Campo area inicializado en usuarios existentes: ${resultadoArea.modifiedCount} actualizados`);
+        
+        // Migración: agregar campo passwordLastUpdated a usuarios existentes
+        const resultadoPassword = await usuarios.updateMany(
+            { passwordLastUpdated: { $exists: false } },
+            { $set: { passwordLastUpdated: new Date() } }
+        );
+        console.log(`✅ Campo passwordLastUpdated inicializado: ${resultadoPassword.modifiedCount} usuarios actualizados`);
 
         res.json({ 
             success: true, 
             message: 'Base de datos inicializada correctamente',
             collections: collections,
             migraciones: {
-                area: resultadoArea.modifiedCount
+                area: resultadoArea.modifiedCount,
+                passwordLastUpdated: resultadoPassword.modifiedCount
             }
         });
         

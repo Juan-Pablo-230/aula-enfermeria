@@ -18,7 +18,7 @@ if (versionBeta == true) {
     }
     const footer = document.querySelector('footer');
     if (footer) {
-        footer.innerHTML = '<a href="https://www.enfermeriaenaccion.com.ar/" style="color: #667eea; text-decoration: none;">Ir a la versión estable del sistema.</a>' + '<br>' + '<span style="color: #ff6b6b; font-weight: bold;">Versión:</span> 3.1.2';
+        footer.innerHTML = '<a href="https://www.enfermeriaenaccion.com.ar/" style="color: #667eea; text-decoration: none;">Ir a la versión estable del sistema.</a>' + '<br>' + '<span style="color: #ff6b6b; font-weight: bold;">Versión:</span> 3.2.0';
         
     }
 }
@@ -39,7 +39,7 @@ else {
     }
     const footer = document.querySelector('footer');
     if (footer) {
-        footer.innerHTML = '<a href="https://aula-enfermeria-beta.vercel.app/index.html" style="color: #667eea; text-decoration: none;">Ir a la versión BETA del sistema.</a>' + '<br>' + '<span style="color: #2d5a5a; font-weight: bold;">Versión:</span> 3.1';
+        footer.innerHTML = '<a href="https://aula-enfermeria-beta.vercel.app/index.html" style="color: #667eea; text-decoration: none;">Ir a la versión BETA del sistema.</a>' + '<br>' + '<span style="color: #2d5a5a; font-weight: bold;">Versión:</span> 3.2';
     }
 }
 
@@ -60,13 +60,80 @@ class AuthSystem {
         if (savedUser) {
             this.currentUser = JSON.parse(savedUser);
             console.log('Usuario encontrado en localStorage:', this.currentUser);
+            console.log('📅 passwordLastUpdated guardado:', this.currentUser.passwordLastUpdated);
+            
+            // ✅ Verificar sesión UNA sola vez al cargar la página
+            setTimeout(() => {
+                this.validateSessionOnce();
+            }, 500);
+            
             setTimeout(() => {
                 this.checkMigrationNeeded();
-            }, 500);
+            }, 1000);
         } else {
             console.log('No hay usuario en localStorage');
         }
     }
+
+    // ✅ Validar sesión UNA sola vez - Cierre automático silencioso
+async validateSessionOnce() {
+    if (!this.isLoggedIn() || !this.currentUser) {
+        console.log('❌ No hay usuario logueado para validar');
+        return;
+    }
+    
+    console.log('🔍 Validando sesión para:', this.currentUser.apellidoNombre);
+    console.log('📅 passwordLastUpdated:', this.currentUser.passwordLastUpdated);
+    
+    try {
+        const response = await fetch('/api/auth/validate-session', {
+            method: 'GET',
+            headers: {
+                'user-id': this.currentUser._id,
+                'last-password-change': this.currentUser.passwordLastUpdated || ''
+            }
+        });
+        
+        if (!response.ok) {
+            console.log('⚠️ Error en validación, status:', response.status);
+            return;
+        }
+        
+        const result = await response.json();
+        console.log('📡 Respuesta validación:', result);
+        
+        // Si el servidor dice que necesita actualización de fecha
+        if (result.needsUpdate && result.passwordLastUpdated) {
+            console.log('🔄 Actualizando passwordLastUpdated del cliente');
+            this.currentUser.passwordLastUpdated = result.passwordLastUpdated;
+            localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+            console.log('✅ Fecha actualizada, sesión válida');
+            return;
+        }
+        
+        // Si la sesión es inválida, cerrar automáticamente
+        if (!result.sessionValid) {
+            console.log('🔒 Sesión inválida - Contraseña cambiada en otro dispositivo');
+            this.logout();
+            window.location.reload();
+            return;
+        }
+        
+        // Actualizar la fecha local si es diferente (por si acaso)
+        if (result.passwordLastUpdated && 
+            result.passwordLastUpdated !== this.currentUser.passwordLastUpdated) {
+            console.log('🔄 Actualizando passwordLastUpdated local (diferente)');
+            this.currentUser.passwordLastUpdated = result.passwordLastUpdated;
+            localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+        }
+        
+        console.log('✅ Sesión válida');
+        
+    } catch (error) {
+        console.log('⚠️ No se pudo validar la sesión:', error.message);
+        // No hacer nada, mantener la sesión
+    }
+}
 
     async checkMigrationNeeded() {
         if (this.migrationModalActive) return;
@@ -161,37 +228,40 @@ class AuthSystem {
     }
 
     async login(identifier, password) {
-        try {
-            const result = await this.makeRequest('/auth/login', {
-                identifier: identifier,
-                password: password
-            });
-            
-            if (!result.success) {
-                throw new Error(result.message || 'Error de conexión con el servidor');
-            }
-            
-            this.currentUser = result.data;
-            localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
-            
-            console.log('✅ Login exitoso MongoDB:', this.currentUser.apellidoNombre);
-            console.log('📊 Estado de migración:', {
-                needsPasswordChange: this.currentUser.needsPasswordChange,
-                passwordAlreadyUpdated: this.currentUser.passwordAlreadyUpdated,
-                area: this.currentUser.area
-            });
-            
-            setTimeout(() => {
-                this.checkMigrationNeeded();
-            }, 500);
-            
-            return this.currentUser;
-            
-        } catch (error) {
-            console.error('❌ Error en login:', error);
-            throw error;
+    try {
+        const result = await this.makeRequest('/auth/login', {
+            identifier: identifier,
+            password: password
+        });
+        
+        if (!result.success) {
+            throw new Error(result.message || 'Error de conexión con el servidor');
         }
+        
+        this.currentUser = result.data;
+        
+        // Asegurar que passwordLastUpdated existe
+        if (!this.currentUser.passwordLastUpdated) {
+            console.log('⚠️ Usuario sin passwordLastUpdated, asignando fecha actual');
+            this.currentUser.passwordLastUpdated = new Date().toISOString();
+        }
+        
+        localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+        
+        console.log('✅ Login exitoso MongoDB:', this.currentUser.apellidoNombre);
+        console.log('📅 passwordLastUpdated guardado:', this.currentUser.passwordLastUpdated);
+        
+        setTimeout(() => {
+            this.checkMigrationNeeded();
+        }, 500);
+        
+        return this.currentUser;
+        
+    } catch (error) {
+        console.error('❌ Error en login:', error);
+        throw error;
     }
+}
 
     async showMigrationModal() {
         if (this.migrationModalActive) {

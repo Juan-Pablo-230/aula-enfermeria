@@ -458,7 +458,7 @@ showUserInfo() {
         }
     }
 
-    // /js/profile-updater.js - Método showReportButtons con posición corregida
+    // /js/profile-updater.js - Método showReportButtons CORREGIDO
 
 showReportButtons(userActions) {
     // Esperar a que authSystem esté listo
@@ -477,10 +477,6 @@ showReportButtons(userActions) {
     if (existingReportBtn) existingReportBtn.remove();
     if (existingViewReportsBtn) existingViewReportsBtn.remove();
     
-    // Eliminar contenedor existente
-    const existingContainer = document.querySelector('.report-buttons-container');
-    if (existingContainer) existingContainer.remove();
-    
     // Determinar qué botones mostrar según el rol
     const showReportBtn = (user.role === 'user');
     const showViewReportsBtn = (user.role === 'advanced' || user.role === 'admin');
@@ -488,12 +484,8 @@ showReportButtons(userActions) {
     // Si no hay botones que mostrar, salir
     if (!showReportBtn && !showViewReportsBtn) return;
     
-    // Crear contenedor para botones de reportes
-    const reportContainer = document.createElement('div');
-    reportContainer.className = 'report-buttons-container';
-    reportContainer.style.display = 'inline-flex';
-    reportContainer.style.gap = '8px';
-    reportContainer.style.marginLeft = '10px';
+    // Crear los botones individualmente y agregarlos DIRECTAMENTE a userActions
+    // (sin contenedor extra para evitar problemas de alineación)
     
     // Botón "Reportar un error" (solo para usuarios estándar)
     if (showReportBtn) {
@@ -501,22 +493,27 @@ showReportButtons(userActions) {
         reportBtn.id = 'reportErrorBtn';
         reportBtn.className = 'report-error-btn';
         reportBtn.innerHTML = '🐛 Reportar un error';
+        reportBtn.title = 'Reportar un problema técnico';
         reportBtn.style.cssText = `
             background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
             color: white;
             border: none;
-            padding: 8px 16px;
+            padding: 12px 18px;
             border-radius: 8px;
             cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
+            font-weight: 700;
+            font-size: 0.95em;
             transition: all 0.3s ease;
-            display: inline-flex;
+            display: flex;
             align-items: center;
-            gap: 6px;
+            justify-content: center;
+            gap: 8px;
+            white-space: nowrap;
+            width: 100%;
         `;
+        
         reportBtn.onmouseover = () => {
-            reportBtn.style.transform = 'translateY(-2px)';
+            reportBtn.style.transform = 'translateY(-3px)';
             reportBtn.style.boxShadow = '0 4px 12px rgba(243, 156, 18, 0.4)';
         };
         reportBtn.onmouseout = () => {
@@ -527,7 +524,15 @@ showReportButtons(userActions) {
             e.preventDefault();
             this.showReportModal();
         };
-        reportContainer.appendChild(reportBtn);
+        
+        const logoutBtn = document.getElementById('logoutBtn');
+if (logoutBtn) {
+    // Insertar ANTES del botón de cerrar sesión
+    userActions.insertBefore(reportBtn, logoutBtn);
+} else {
+    userActions.appendChild(reportBtn);
+}
+
     }
     
     // Botón "Ver reportes" (solo para advanced y admin)
@@ -536,22 +541,27 @@ showReportButtons(userActions) {
         viewReportsBtn.id = 'viewReportsBtn';
         viewReportsBtn.className = 'view-reports-btn';
         viewReportsBtn.innerHTML = '📋 Ver reportes';
+        viewReportsBtn.title = 'Ver todos los reportes de errores';
         viewReportsBtn.style.cssText = `
             background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
             color: white;
             border: none;
-            padding: 8px 16px;
+            padding: 12px 18px;
             border-radius: 8px;
             cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
+            font-weight: 700;
+            font-size: 0.95em;
             transition: all 0.3s ease;
-            display: inline-flex;
+            display: flex;
             align-items: center;
-            gap: 6px;
+            justify-content: center;
+            gap: 8px;
+            white-space: nowrap;
+            width: 100%;
         `;
+        
         viewReportsBtn.onmouseover = () => {
-            viewReportsBtn.style.transform = 'translateY(-2px)';
+            viewReportsBtn.style.transform = 'translateY(-3px)';
             viewReportsBtn.style.boxShadow = '0 4px 12px rgba(52, 152, 219, 0.4)';
         };
         viewReportsBtn.onmouseout = () => {
@@ -562,22 +572,15 @@ showReportButtons(userActions) {
             e.preventDefault();
             window.location.href = '/reports.html';
         };
-        reportContainer.appendChild(viewReportsBtn);
+        
+        const logoutBtn = document.getElementById('logoutBtn');
+if (logoutBtn) {
+    userActions.insertBefore(viewReportsBtn, logoutBtn);
+} else {
+    userActions.appendChild(viewReportsBtn);
+}
     }
-    
-    // ============================================
-    // IMPORTANTE: Insertar DESPUÉS del botón "Mi perfil"
-    // y ANTES del botón "Calendario Educativo"
-    // ============================================
-    const updateProfileBtn = document.getElementById('updateProfileBtn');
-    if (updateProfileBtn && updateProfileBtn.parentNode) {
-        // Insertar el contenedor después del botón "Mi perfil"
-        updateProfileBtn.parentNode.insertBefore(reportContainer, updateProfileBtn.nextSibling);
-    } else {
-        // Fallback: agregar al final de userActions
-        userActions.appendChild(reportContainer);
-    }
-    }
+}
   
   // /js/profile-updater.js - Método showReportModal modificado
 
@@ -733,28 +736,32 @@ showReportModal() {
       }, 3000);
     }
   }
-  
-  // Modificar el método showUserInfo existente para incluir los botones de reportes
-  // Busca este método en tu archivo y actualízalo:
-  showUserInfo() {
+
+  // /js/profile-updater.js - Método showUserInfo CORREGIDO
+
+showUserInfo() {
     const user = authSystem.getCurrentUser();
     const userInfo = document.getElementById('userInfo');
     const userName = document.getElementById('userName');
     if (user && userInfo && userName) {
-      let roleBadge = '';
-      if (user.role === 'admin') roleBadge = ' 👑';
-      else if (user.role === 'advanced') roleBadge = ' ⭐';
-      userName.textContent = `👤 ${user.apellidoNombre} - Legajo: ${user.legajo}${roleBadge}`;
-      userInfo.style.display = 'block';
-      if (this.materialButtonContainer) this.materialButtonContainer.style.display = 'block';
-      this.showAdminPanelButton(user);
-      const userActions = document.querySelector('.user-actions');
-      if (userActions) {
-        this.showCalendarButton(userActions);
-        this.showReportButtons(userActions);  // ← AÑADIR ESTA LÍNEA
-      }
+        let roleBadge = '';
+        if (user.role === 'admin') roleBadge = ' 👑';
+        else if (user.role === 'advanced') roleBadge = ' ⭐';
+        userName.textContent = `👤 ${user.apellidoNombre} - Legajo: ${user.legajo}${roleBadge}`;
+        userInfo.style.display = 'block';
+        if (this.materialButtonContainer) this.materialButtonContainer.style.display = 'block';
+        this.showAdminPanelButton(user);
+        const userActions = document.querySelector('.user-actions');
+        if (userActions) {
+            // Limpiar botones existentes de reportes y calendario para evitar duplicados
+            const existingCalendarBtn = document.getElementById('calendarBtn');
+            if (existingCalendarBtn) existingCalendarBtn.remove();
+            
+            this.showCalendarButton(userActions);
+            this.showReportButtons(userActions);
+        }
     }
-  }
+}
 
 }
 
