@@ -1391,7 +1391,7 @@ app.get('/api/clases-publicas/publicadas', async (req, res) => {
         const db = await mongoDB.getDatabaseSafe('formulario');
         const clases = await db.collection('clases-publicas')
             .find({ publicada: true })
-            .sort({ fechaClase: -1 })
+            .sort({ fechaClase: 1 }) // Orden ascendente para mostrar primero las más próximas
             .toArray();
         
         console.log(`✅ ${clases.length} clases publicadas encontradas`);
@@ -1446,15 +1446,13 @@ app.get('/api/clases-publicas/:id', async (req, res) => {
     }
 });
 
-// POST - Crear nueva clase pública (CON ÁREA)
+// POST - Crear nueva clase pública
 app.post('/api/clases-publicas', async (req, res) => {
     try {
         const userHeader = req.headers['user-id'];
         
         console.log('📦 ========== POST /api/clases-publicas ==========');
-        console.log('📦 Body COMPLETO recibido:', JSON.stringify(req.body, null, 2));
-        console.log('📦 Campo "area" en body:', req.body.area);
-        console.log('📦 Tipo de area:', typeof req.body.area);
+        console.log('📦 Body recibido:', JSON.stringify(req.body, null, 2));
         
         if (!userHeader) {
             return res.status(401).json({ success: false, message: 'No autenticado' });
@@ -1473,36 +1471,64 @@ app.post('/api/clases-publicas', async (req, res) => {
             });
         }
         
-        const { nombre, descripcion, fechaClase, instructores, lugar, enlaceFormulario, publicada, area } = req.body;
+        const { nombre, descripcion, fechaClase, fechaCierre, instructores, lugar, enlaceFormulario, publicada, area } = req.body;
         
         if (!nombre || !fechaClase) {
             return res.status(400).json({ 
                 success: false, 
-                message: 'Nombre y fecha son obligatorios' 
+                message: 'Nombre y fecha/hora de la clase son obligatorios' 
             });
         }
         
-        // Procesar fecha
-        let fecha;
+        if (!fechaCierre) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'La fecha y hora de cierre es obligatoria' 
+            });
+        }
+        
+        // Procesar fecha y hora de la clase
+        let fechaClaseDate;
         if (fechaClase.includes('T')) {
             const [fechaPart, horaPart] = fechaClase.split('T');
             const [year, month, day] = fechaPart.split('-').map(Number);
             const [hour, minute] = horaPart.split(':').map(Number);
-            const horaUTC = hour + 3;
-            fecha = new Date(Date.UTC(year, month - 1, day, horaUTC, minute, 0));
+            const horaUTC = hour + 3; // Ajuste a UTC-3
+            fechaClaseDate = new Date(Date.UTC(year, month - 1, day, horaUTC, minute, 0));
         } else {
             const [year, month, day] = fechaClase.split('-').map(Number);
-            fecha = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
+            fechaClaseDate = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
         }
         
-        // ✅ Asegurar que el área se guarda correctamente
+        // Procesar fecha de cierre
+        let fechaCierreDate;
+        if (fechaCierre.includes('T')) {
+            const [fechaPart, horaPart] = fechaCierre.split('T');
+            const [year, month, day] = fechaPart.split('-').map(Number);
+            const [hour, minute] = horaPart.split(':').map(Number);
+            const horaUTC = hour + 3; // Ajuste a UTC-3
+            fechaCierreDate = new Date(Date.UTC(year, month - 1, day, horaUTC, minute, 0));
+        } else {
+            const [year, month, day] = fechaCierre.split('-').map(Number);
+            fechaCierreDate = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
+        }
+        
+        // Validar que fechaCierre sea posterior a fechaClase
+        if (fechaCierreDate <= fechaClaseDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'La fecha de cierre debe ser posterior a la fecha/hora de la clase'
+            });
+        }
+        
         const areaFinal = area || 'todas';
         console.log('📌 Área a guardar en BD:', areaFinal);
         
         const nuevaClase = {
             nombre,
             descripcion: descripcion || '',
-            fechaClase: fecha,
+            fechaClase: fechaClaseDate,
+            fechaCierre: fechaCierreDate,
             instructores: instructores || [],
             lugar: lugar || '',
             enlaceFormulario: enlaceFormulario || '',
@@ -1516,6 +1542,8 @@ app.post('/api/clases-publicas', async (req, res) => {
         
         console.log('✅ Clase creada con ID:', result.insertedId);
         console.log('📌 Área guardada:', areaFinal);
+        console.log('📅 Fecha clase:', fechaClaseDate);
+        console.log('🔒 Fecha cierre:', fechaCierreDate);
         
         res.json({ 
             success: true, 
@@ -1529,15 +1557,14 @@ app.post('/api/clases-publicas', async (req, res) => {
     }
 });
 
-// PUT - Actualizar clase pública (CON ÁREA)
+// PUT - Actualizar clase pública
 app.put('/api/clases-publicas/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const userHeader = req.headers['user-id'];
         
         console.log('📦 ========== PUT /api/clases-publicas/:id ==========');
-        console.log('📦 Body COMPLETO recibido:', JSON.stringify(req.body, null, 2));
-        console.log('📦 Campo "area" en body:', req.body.area);
+        console.log('📦 Body recibido:', JSON.stringify(req.body, null, 2));
         
         if (!userHeader || !ObjectId.isValid(id)) {
             return res.status(401).json({ success: false, message: 'Solicitud inválida' });
@@ -1556,29 +1583,51 @@ app.put('/api/clases-publicas/:id', async (req, res) => {
             });
         }
         
-        const { nombre, descripcion, fechaClase, instructores, lugar, enlaceFormulario, publicada, area } = req.body;
+        const { nombre, descripcion, fechaClase, fechaCierre, instructores, lugar, enlaceFormulario, publicada, area } = req.body;
         
         if (!nombre || !fechaClase) {
             return res.status(400).json({ 
                 success: false, 
-                message: 'Nombre y fecha son obligatorios' 
+                message: 'Nombre y fecha/hora de la clase son obligatorios' 
             });
         }
         
-        // Procesar fecha
-        let fecha;
+        // Procesar fecha y hora de la clase
+        let fechaClaseDate;
         if (fechaClase.includes('T')) {
             const [fechaPart, horaPart] = fechaClase.split('T');
             const [year, month, day] = fechaPart.split('-').map(Number);
             const [hour, minute] = horaPart.split(':').map(Number);
             const horaUTC = hour + 3;
-            fecha = new Date(Date.UTC(year, month - 1, day, horaUTC, minute, 0));
+            fechaClaseDate = new Date(Date.UTC(year, month - 1, day, horaUTC, minute, 0));
         } else {
             const [year, month, day] = fechaClase.split('-').map(Number);
-            fecha = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
+            fechaClaseDate = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
         }
         
-        // ✅ Asegurar que el área se actualiza correctamente
+        // Procesar fecha de cierre
+        let fechaCierreDate = null;
+        if (fechaCierre) {
+            if (fechaCierre.includes('T')) {
+                const [fechaPart, horaPart] = fechaCierre.split('T');
+                const [year, month, day] = fechaPart.split('-').map(Number);
+                const [hour, minute] = horaPart.split(':').map(Number);
+                const horaUTC = hour + 3;
+                fechaCierreDate = new Date(Date.UTC(year, month - 1, day, horaUTC, minute, 0));
+            } else {
+                const [year, month, day] = fechaCierre.split('-').map(Number);
+                fechaCierreDate = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
+            }
+            
+            // Validar que fechaCierre sea posterior a fechaClase
+            if (fechaCierreDate <= fechaClaseDate) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'La fecha de cierre debe ser posterior a la fecha/hora de la clase'
+                });
+            }
+        }
+        
         const areaFinal = area || 'todas';
         console.log('📌 Área a actualizar en BD:', areaFinal);
         
@@ -1586,7 +1635,7 @@ app.put('/api/clases-publicas/:id', async (req, res) => {
             $set: {
                 nombre,
                 descripcion: descripcion || '',
-                fechaClase: fecha,
+                fechaClase: fechaClaseDate,
                 instructores: instructores || [],
                 lugar: lugar || '',
                 enlaceFormulario: enlaceFormulario || '',
@@ -1595,6 +1644,10 @@ app.put('/api/clases-publicas/:id', async (req, res) => {
                 fechaActualizacion: new Date()
             }
         };
+        
+        if (fechaCierreDate) {
+            updateData.$set.fechaCierre = fechaCierreDate;
+        }
         
         const result = await db.collection('clases-publicas').updateOne(
             { _id: new ObjectId(id) },
@@ -2401,9 +2454,7 @@ app.post('/api/logs/browser', async (req, res) => {
         
         const collection = logsDb.collection('logs');
         
-        // ============================================
-        // CONFIGURAR TTL (15 DÍAS = 1,296,000 segundos)
-        // ============================================
+        // Configurar TTL e índices
         try {
             const indexes = await collection.indexes();
             const hasTTL = indexes.some(idx => idx.name === 'ttl_expire');
@@ -2419,7 +2470,6 @@ app.post('/api/logs/browser', async (req, res) => {
                 console.log('✅ Índice TTL configurado: logs expiran después de 15 días');
             }
             
-            // Índices adicionales para búsquedas rápidas
             const hasIdIndex = indexes.some(idx => idx.name === 'id_index');
             if (!hasIdIndex) {
                 await collection.createIndex({ _id: 1 }, { name: 'id_index' });
@@ -3374,16 +3424,6 @@ app.put('/api/cartelera/:id', async (req, res) => {
     }
 });
 
-// Agrega esto cerca de las otras rutas de prueba
-app.get('/api/logs/test', (req, res) => {
-    console.log('✅ Ruta /api/logs/test funcionando');
-    res.json({ 
-        success: true, 
-        message: 'Ruta de logs funcionando',
-        timestamp: new Date().toISOString()
-    });
-});
-
 // DELETE - Eliminar aviso
 app.delete('/api/cartelera/:id', async (req, res) => {
     try {
@@ -3438,6 +3478,16 @@ app.delete('/api/cartelera/:id', async (req, res) => {
             error: error.message 
         });
     }
+});
+
+// ==================== RUTA DE PRUEBA ADICIONAL ====================
+app.get('/api/logs/test', (req, res) => {
+    console.log('✅ Ruta /api/logs/test funcionando');
+    res.json({ 
+        success: true, 
+        message: 'Ruta de logs funcionando',
+        timestamp: new Date().toISOString()
+    });
 });
 
 // ==================== EXPORTAR LA APP ====================
