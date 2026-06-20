@@ -1,4 +1,4 @@
-let versionBeta = true; // Variable global para indicar en que version estamos, true = beta, false = estable
+let versionBeta = false; // Variable global para indicar en que version estamos, true = beta, false = estable
 
 if (versionBeta == true) {
     console.warn("Esta es una versión BETA del Aula Virtual. Puede contener errores o funcionalidades incompletas. Por favor, utilícelo con precaución y reporte cualquier problema al desarrollador.");
