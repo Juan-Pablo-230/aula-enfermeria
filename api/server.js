@@ -404,30 +404,25 @@ app.get('/api/auth/check-legajo/:legajo', async (req, res) => {
 // ==================== RUTAS DE INSCRIPCIONES ====================
 app.post('/api/inscripciones', async (req, res) => {
     try {
-        const { usuarioId, clase, turno, fecha, claseId } = req.body;
+        const { usuarioId, clase, fecha, claseId } = req.body; // ← Eliminamos turno
+        
+        // Verificar que el usuario existe y obtener su turno (opcional, para validación)
         const db = await mongoDB.getDatabaseSafe('formulario');
+        const usuario = await db.collection('usuarios').findOne({ 
+            _id: new ObjectId(usuarioId) 
+        });
         
-        // Verificar si ya está inscrito
-        let query = {
-            usuarioId: new ObjectId(usuarioId),
-            clase: clase
-        };
-        
-        const inscripcionExistente = await db.collection('inscripciones').findOne(query);
-        
-        if (inscripcionExistente) {
-            return res.json({ 
-                success: true, 
-                message: 'Ya estás inscrito en esta clase',
-                exists: true
+        if (!usuario) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Usuario no encontrado' 
             });
         }
         
-        // Crear nueva inscripción
+        // Crear inscripción SIN turno
         const nuevaInscripcion = {
             usuarioId: new ObjectId(usuarioId),
             clase,
-            turno,
             fecha: new Date(fecha || Date.now())
         };
         
@@ -506,7 +501,6 @@ app.get('/api/inscripciones', async (req, res) => {
     try {
         const db = await mongoDB.getDatabaseSafe('formulario');
         
-        // Obtener todas las inscripciones con datos del usuario
         const inscripciones = await db.collection('inscripciones')
             .aggregate([
                 {
@@ -533,6 +527,9 @@ app.get('/api/inscripciones', async (req, res) => {
             if (inscripcion.usuario && inscripcion.usuario.password) {
                 delete inscripcion.usuario.password;
             }
+            
+            // ⭐ El turno ahora se obtiene de inscripcion.usuario.turno
+            // No es necesario guardarlo en la inscripción
             
             return inscripcion;
         });
@@ -911,19 +908,29 @@ app.delete('/api/clases-historicas/:id', async (req, res) => {
 app.post('/api/material-historico/solicitudes', async (req, res) => {
     try {
         const userHeader = req.headers['user-id'];
+        const { claseId } = req.body;
         
-        console.log('📦 POST /material-historico/solicitudes - Headers user-id:', userHeader);
+        console.log('📦 POST /material-historico/solicitudes');
+        console.log('👤 user-id:', userHeader);
+        console.log('📚 claseId:', claseId);
         
         if (!userHeader) {
             return res.status(401).json({ 
                 success: false, 
-                message: 'No autenticado - Falta user-id en headers' 
+                message: 'No autenticado' 
             });
         }
         
-        const { claseId, claseNombre, email, youtube, powerpoint } = req.body;
+        if (!claseId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'El ID de la clase es requerido' 
+            });
+        }
+        
         const db = await mongoDB.getDatabaseSafe('formulario');
         
+        // Verificar usuario
         const usuario = await db.collection('usuarios').findOne({ 
             _id: new ObjectId(userHeader) 
         });
@@ -935,36 +942,47 @@ app.post('/api/material-historico/solicitudes', async (req, res) => {
             });
         }
         
+        // Verificar que la clase existe
+        const clase = await db.collection('clases').findOne({ 
+            _id: new ObjectId(claseId) 
+        });
+        
+        if (!clase) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Clase no encontrada' 
+            });
+        }
+        
+        // Verificar si ya solicitó esta clase
         const solicitudExistente = await db.collection('solicitudMaterial').findOne({
             usuarioId: new ObjectId(userHeader),
-            claseId: claseId
+            claseId: new ObjectId(claseId)
         });
         
         if (solicitudExistente) {
             return res.json({ 
                 success: true, 
                 message: 'Material ya solicitado anteriormente',
-                data: solicitudExistente,
                 exists: true
             });
         }
         
+        // ✅ Guardar SOLO las referencias (sin datos duplicados)
         const nuevaSolicitud = {
             usuarioId: new ObjectId(userHeader),
-            claseId: claseId,
-            claseNombre: claseNombre,
-            email: email,
-            youtube: youtube,
-            powerpoint: powerpoint,
+            claseId: new ObjectId(claseId),
             fechaSolicitud: new Date()
         };
         
-        await db.collection('solicitudMaterial').insertOne(nuevaSolicitud);
+        const result = await db.collection('solicitudMaterial').insertOne(nuevaSolicitud);
+        
+        console.log('✅ Solicitud creada:', result.insertedId);
         
         res.json({ 
             success: true, 
             message: 'Solicitud de material histórico registrada exitosamente',
-            data: nuevaSolicitud
+            data: { ...nuevaSolicitud, _id: result.insertedId }
         });
         
     } catch (error) {
@@ -981,12 +999,12 @@ app.get('/api/material-historico/solicitudes', async (req, res) => {
     try {
         const userHeader = req.headers['user-id'];
         
-        console.log('📦 GET /material-historico/solicitudes - Headers user-id:', userHeader);
+        console.log('📦 GET /material-historico/solicitudes - user-id:', userHeader);
         
         if (!userHeader) {
             return res.status(401).json({ 
                 success: false, 
-                message: 'No autenticado - Falta user-id en headers' 
+                message: 'No autenticado' 
             });
         }
         
@@ -1005,16 +1023,16 @@ app.get('/api/material-historico/solicitudes', async (req, res) => {
         
         let matchCriteria = { usuarioId: new ObjectId(userHeader) };
         
-        if (usuario.role === 'admin') {
-            console.log('👑 Admin: viendo TODAS las solicitudes de material histórico');
+        // Admin y Advanced ven todas
+        if (usuario.role === 'admin' || usuario.role === 'advanced') {
+            console.log('👑 Admin/Advanced: viendo TODAS las solicitudes');
             matchCriteria = {};
         }
         
+        // ✅ Agregar lookup para obtener datos completos de usuario y clase
         const solicitudes = await db.collection('solicitudMaterial')
             .aggregate([
-                {
-                    $match: matchCriteria
-                },
+                { $match: matchCriteria },
                 {
                     $lookup: {
                         from: 'usuarios',
@@ -1024,11 +1042,20 @@ app.get('/api/material-historico/solicitudes', async (req, res) => {
                     }
                 },
                 { $unwind: { path: '$usuario', preserveNullAndEmptyArrays: true } },
+                {
+                    $lookup: {
+                        from: 'clases',
+                        localField: 'claseId',
+                        foreignField: '_id',
+                        as: 'clase'
+                    }
+                },
+                { $unwind: { path: '$clase', preserveNullAndEmptyArrays: true } },
                 { $sort: { fechaSolicitud: -1 } }
             ])
             .toArray();
         
-        console.log(`📊 Encontradas ${solicitudes.length} solicitudes de material histórico`);
+        console.log(`📊 ${solicitudes.length} solicitudes encontradas`);
         
         res.json({ 
             success: true, 
@@ -1525,18 +1552,24 @@ app.post('/api/clases-publicas', async (req, res) => {
         console.log('📌 Área a guardar en BD:', areaFinal);
         
         const nuevaClase = {
-            nombre,
-            descripcion: descripcion || '',
-            fechaClase: fechaClaseDate,
-            fechaCierre: fechaCierreDate,
-            instructores: instructores || [],
-            lugar: lugar || '',
-            enlaceFormulario: enlaceFormulario || '',
-            publicada: publicada === true,
-            area: areaFinal,
-            fechaCreacion: new Date(),
-            creadoPor: new ObjectId(userHeader)
-        };
+    nombre,
+    descripcion: descripcion || '',
+    fechaClase: fechaClaseDate,
+    fechaCierre: fechaCierreDate,
+    instructores: instructores || [],
+    lugar: lugar || '',
+    enlaceFormulario: enlaceFormulario || '',
+    publicada: publicada === true,
+    area: areaFinal,
+    
+    // ===== CONTROLES INTERNOS =====
+    auditorio: req.body.auditorio === true || false,
+    cafeteria: req.body.cafeteria === true || false,
+    material: req.body.material === true || false,
+    
+    fechaCreacion: new Date(),
+    creadoPor: new ObjectId(userHeader)
+};
         
         const result = await db.collection('clases-publicas').insertOne(nuevaClase);
         
@@ -1631,19 +1664,26 @@ app.put('/api/clases-publicas/:id', async (req, res) => {
         const areaFinal = area || 'todas';
         console.log('📌 Área a actualizar en BD:', areaFinal);
         
+        
         const updateData = {
-            $set: {
-                nombre,
-                descripcion: descripcion || '',
-                fechaClase: fechaClaseDate,
-                instructores: instructores || [],
-                lugar: lugar || '',
-                enlaceFormulario: enlaceFormulario || '',
-                publicada: publicada === true,
-                area: areaFinal,
-                fechaActualizacion: new Date()
-            }
-        };
+    $set: {
+        nombre,
+        descripcion: descripcion || '',
+        fechaClase: fechaClaseDate,
+        instructores: instructores || [],
+        lugar: lugar || '',
+        enlaceFormulario: enlaceFormulario || '',
+        publicada: publicada === true,
+        area: areaFinal,
+        
+        // ===== CONTROLES INTERNOS =====
+        auditorio: req.body.auditorio === true || false,
+        cafeteria: req.body.cafeteria === true || false,
+        material: req.body.material === true || false,
+        
+        fechaActualizacion: new Date()
+    }
+};
         
         if (fechaCierreDate) {
             updateData.$set.fechaCierre = fechaCierreDate;
@@ -2066,7 +2106,8 @@ app.post('/api/tiempo-clase/actualizar', async (req, res) => {
     try {
         const userHeader = req.headers['user-id'];
         
-        console.log('⏱️ POST /api/tiempo-clase/actualizar - Usuario:', userHeader);
+        console.log('⏱️ POST /api/tiempo-clase/actualizar');
+        console.log('📦 Body recibido:', req.body);
         
         if (!userHeader) {
             return res.status(401).json({ 
@@ -2077,7 +2118,7 @@ app.post('/api/tiempo-clase/actualizar', async (req, res) => {
         
         const { claseId, claseNombre, tiempoActivo, tiempoInactivo, esFinal } = req.body;
         
-        if (!claseId || !claseNombre || tiempoActivo === undefined || tiempoInactivo === undefined) {
+        if (!claseId || tiempoActivo === undefined || tiempoInactivo === undefined) {
             return res.status(400).json({ 
                 success: false, 
                 message: 'Faltan datos requeridos' 
@@ -2097,70 +2138,50 @@ app.post('/api/tiempo-clase/actualizar', async (req, res) => {
             });
         }
         
+        const ahora = new Date();
+        
         const filtro = {
             usuarioId: new ObjectId(userHeader),
             claseId: claseId
         };
         
-        const registroExistente = await db.collection('tiempo-en-clases').findOne(filtro);
-        
-        const ahora = new Date();
-        
-        if (registroExistente) {
-            const updateData = {
-                $set: {
-                    usuarioNombre: usuario.apellidoNombre,
-                    legajo: usuario.legajo,
-                    turno: usuario.turno,
-                    claseNombre: claseNombre,
-                    ultimaActualizacion: ahora
-                },
-                $inc: {
-                    tiempoActivo: tiempoActivo,
-                    tiempoInactivo: tiempoInactivo
-                }
-            };
-            
-            if (esFinal) {
-                updateData.$set.finalizado = true;
-                updateData.$set.fechaFinalizacion = ahora;
-            }
-            
-            await db.collection('tiempo-en-clases').updateOne(filtro, updateData);
-            
-            console.log(`✅ Tiempo ACTUALIZADO para ${usuario.apellidoNombre} en ${claseNombre}`);
-            console.log(`   + Activo: ${tiempoActivo}s, + Inactivo: ${tiempoInactivo}s`);
-            
-        } else {
-            const nuevoRegistro = {
-                usuarioId: new ObjectId(userHeader),
-                usuarioNombre: usuario.apellidoNombre,
-                legajo: usuario.legajo,
-                turno: usuario.turno,
-                claseId: claseId,
-                claseNombre: claseNombre,
+        const updateData = {
+            $set: {
+                // ✅ AGREGAR claseNombre
+                claseNombre: claseNombre || null,
+                ultimaActualizacion: ahora
+            },
+            $inc: {
                 tiempoActivo: tiempoActivo,
-                tiempoInactivo: tiempoInactivo,
-                fechaInicio: ahora,
-                ultimaActualizacion: ahora,
-                finalizado: esFinal || false
-            };
-            
-            if (esFinal) {
-                nuevoRegistro.fechaFinalizacion = ahora;
+                tiempoInactivo: tiempoInactivo
+            },
+            $setOnInsert: {
+                fechaInicio: ahora
             }
-            
-            await db.collection('tiempo-en-clases').insertOne(nuevoRegistro);
-            
-            console.log(`✅ Nuevo registro CREADO para ${usuario.apellidoNombre} en ${claseNombre}`);
+        };
+        
+        if (esFinal) {
+            updateData.$set.finalizado = true;
+            updateData.$set.fechaFinalizacion = ahora;
         }
         
-        const registroActualizado = await db.collection('tiempo-en-clases').findOne(filtro);
+        const resultado = await db.collection('tiempo-en-clases').findOneAndUpdate(
+            filtro,
+            updateData,
+            { 
+                upsert: true, 
+                returnDocument: 'after' 
+            }
+        );
+        
+        console.log(`✅ Tiempo actualizado para ${usuario.apellidoNombre}`);
+        console.log(`   + claseNombre: ${claseNombre}`);
+        console.log(`   + Activo: ${tiempoActivo}s, Inactivo: ${tiempoInactivo}s`);
         
         res.json({ 
             success: true, 
             message: 'Tiempo actualizado correctamente',
-            data: registroActualizado
+            data: resultado.value
         });
         
     } catch (error) {
@@ -2177,6 +2198,8 @@ app.get('/api/tiempo-clase', async (req, res) => {
     try {
         const userHeader = req.headers['user-id'];
         const { clase, usuario } = req.query;
+        
+        console.log('📊 GET /api/tiempo-clase - user-id:', userHeader);
         
         if (!userHeader) {
             return res.status(401).json({ 
@@ -2198,6 +2221,7 @@ app.get('/api/tiempo-clase', async (req, res) => {
             });
         }
         
+        // Construir filtro base
         let filtro = {};
         
         if (usuarioActual.role !== 'admin' && usuarioActual.role !== 'advanced') {
@@ -2205,17 +2229,72 @@ app.get('/api/tiempo-clase', async (req, res) => {
         }
         
         if (clase && clase !== 'todas') {
-            filtro.claseNombre = clase;
+            filtro.claseId = clase;
         }
         
         if (usuario && (usuarioActual.role === 'admin' || usuarioActual.role === 'advanced')) {
-            filtro.usuarioId = new ObjectId(usuario);
+            if (ObjectId.isValid(usuario)) {
+                filtro.usuarioId = new ObjectId(usuario);
+            }
         }
         
+        // ✅ Pipeline: Obtener usuario + nombre de clase desde inscripciones
         const registros = await db.collection('tiempo-en-clases')
-            .find(filtro)
-            .sort({ ultimaActualizacion: -1 })
+            .aggregate([
+                { $match: filtro },
+                // 1. Obtener datos del usuario
+                {
+                    $lookup: {
+                        from: 'usuarios',
+                        localField: 'usuarioId',
+                        foreignField: '_id',
+                        as: 'usuario'
+                    }
+                },
+                { $unwind: { path: '$usuario', preserveNullAndEmptyArrays: true } },
+                // 2. Obtener inscripciones del usuario para esta clase
+                {
+                    $lookup: {
+                        from: 'inscripciones',
+                        let: { 
+                            usuarioId: '$usuarioId',
+                            claseId: '$claseId'
+                        },
+                        pipeline: [
+                            { 
+                                $match: { 
+                                    $expr: { 
+                                        $and: [
+                                            { $eq: ['$usuarioId', '$$usuarioId'] },
+                                            { $eq: ['$claseId', '$$claseId'] }
+                                        ]
+                                    }
+                                }
+                            },
+                            { $limit: 1 }
+                        ],
+                        as: 'inscripcion'
+                    }
+                },
+                { $unwind: { path: '$inscripcion', preserveNullAndEmptyArrays: true } },
+                // 3. Agregar el nombre de la clase
+                {
+                    $addFields: {
+                        // ✅ Si tiene inscripción, usar su nombre; si no, usar claseId como fallback
+                        claseNombreFinal: {
+                            $cond: [
+                                { $ne: ['$inscripcion', null] },
+                                '$inscripcion.clase',
+                                '$claseId'
+                            ]
+                        }
+                    }
+                },
+                { $sort: { ultimaActualizacion: -1 } }
+            ])
             .toArray();
+        
+        console.log(`📊 ${registros.length} registros encontrados`);
         
         res.json({ 
             success: true, 
@@ -2325,6 +2404,7 @@ app.get('/api/tiempo-clase/usuario/:usuarioId', async (req, res) => {
             });
         }
         
+        // Verificar permisos
         if (usuarioActual.role !== 'admin' && usuarioActual.role !== 'advanced' && 
             userHeader !== usuarioId) {
             return res.status(403).json({ 
@@ -2333,11 +2413,24 @@ app.get('/api/tiempo-clase/usuario/:usuarioId', async (req, res) => {
             });
         }
         
+        // ✅ Agregar lookup para obtener datos completos del usuario y las clases
         const registros = await db.collection('tiempo-en-clases')
-            .find({ usuarioId: new ObjectId(usuarioId) })
-            .sort({ ultimaActualizacion: -1 })
+            .aggregate([
+                { $match: { usuarioId: new ObjectId(usuarioId) } },
+                {
+                    $lookup: {
+                        from: 'usuarios',
+                        localField: 'usuarioId',
+                        foreignField: '_id',
+                        as: 'usuario'
+                    }
+                },
+                { $unwind: { path: '$usuario', preserveNullAndEmptyArrays: true } },
+                { $sort: { ultimaActualizacion: -1 } }
+            ])
             .toArray();
         
+        // Obtener datos del usuario (sin password)
         const usuario = await db.collection('usuarios').findOne(
             { _id: new ObjectId(usuarioId) },
             { projection: { password: 0 } }
@@ -2394,6 +2487,64 @@ app.get('/api/tiempo-clase/init', async (req, res) => {
             message: 'Error interno del servidor',
             error: error.message 
         });
+    }
+});
+
+// GET - Verificar y crear índice único en tiempo-en-clases (solo admin)
+app.get('/api/tiempo-clase/ensure-index', async (req, res) => {
+    try {
+        const userHeader = req.headers['user-id'];
+        
+        if (!userHeader) {
+            return res.status(401).json({ success: false, message: 'No autorizado' });
+        }
+        
+        const db = await mongoDB.getDatabaseSafe('formulario');
+        const usuario = await db.collection('usuarios').findOne({ _id: new ObjectId(userHeader) });
+        
+        if (!usuario || usuario.role !== 'admin') {
+            return res.status(403).json({ success: false, message: 'Solo administradores' });
+        }
+        
+        const collection = db.collection('tiempo-en-clases');
+        
+        // Verificar si el índice único ya existe
+        const indexes = await collection.indexes();
+        const uniqueIndexExists = indexes.some(idx => idx.name === 'unique_usuario_clase');
+        
+        if (!uniqueIndexExists) {
+            // Eliminar índices existentes que puedan causar conflictos
+            for (const idx of indexes) {
+                if (idx.name !== '_id_' && idx.name !== 'unique_usuario_clase') {
+                    try {
+                        await collection.dropIndex(idx.name);
+                        console.log(`🗑️ Índice eliminado: ${idx.name}`);
+                    } catch (e) {
+                        console.warn(`No se pudo eliminar índice ${idx.name}:`, e.message);
+                    }
+                }
+            }
+            
+            // Crear índice único compuesto
+            await collection.createIndex(
+                { usuarioId: 1, claseId: 1 },
+                { unique: true, name: 'unique_usuario_clase' }
+            );
+            
+            console.log('✅ Índice único creado: usuarioId + claseId');
+        } else {
+            console.log('✅ Índice único ya existe');
+        }
+        
+        res.json({ 
+            success: true, 
+            message: 'Índice único verificado/creado correctamente',
+            indexes: await collection.indexes()
+        });
+        
+    } catch (error) {
+        console.error('❌ Error creando índice:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
