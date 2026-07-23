@@ -1,4 +1,4 @@
-console.log('📚 solicitud-material.js cargado - Versión independiente con localStorage');
+console.log('📚 solicitud-material.js cargado - Versión con clases-publicas');
 
 // ============================================
 // Funciones auxiliares basadas en authSystem
@@ -26,14 +26,6 @@ function getCurrentUserSafe() {
 
 function isLoggedInSafe() {
     return authSystem?.isLoggedIn ? authSystem.isLoggedIn() : false;
-}
-
-async function makeRequestSafe(endpoint, data = null, method = 'POST') {
-    if (!authSystem || !authSystem.makeRequest) {
-        throw new Error('authSystem no listo');
-    }
-    const fullEndpoint = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
-    return await authSystem.makeRequest(fullEndpoint, data, method);
 }
 
 function logoutSafe() {
@@ -64,7 +56,7 @@ class MaterialHistorico {
     }
 
     async init() {
-        console.log('🚀 Inicializando sistema de material histórico con filtro por año y mes...');
+        console.log('🚀 Inicializando sistema de material histórico...');
         
         try {
             await waitForAuthSystem();
@@ -162,14 +154,14 @@ class MaterialHistorico {
 
     async cargarClasesHistoricas() {
     try {
-        console.log('📥 Cargando clases desde MongoDB.');
+        console.log('📥 Cargando clases desde MongoDB (clases-publicas)...');
         
         const user = getCurrentUserSafe();
         if (!user) {
             throw new Error('Usuario no disponible');
         }
 
-        const response = await fetch(`${this.apiBaseUrl}/clases-historicas`, {
+        const response = await fetch(`${this.apiBaseUrl}/clases-publicas/publicadas`, {
             headers: {
                 'Content-Type': 'application/json',
                 'user-id': user._id
@@ -181,43 +173,71 @@ class MaterialHistorico {
         }
         
         const result = await response.json();
+        console.log('📦 Respuesta de /api/clases-publicas/publicadas:', result);
         
         if (result.success && result.data) {
-            // Obtener todas las clases publicadas/activas
-            let todasClases = result.data.filter(clase => 
-                clase.estado === 'publicada' || 
-                (clase.activa === true && !clase.estado)
+            // 1. Filtrar solo clases publicadas
+            let clasesPublicadas = result.data.filter(clase => 
+                clase.publicada === true
             );
             
-            // ========== NUEVO: FILTRAR POR ÁREA DEL USUARIO ==========
+            console.log(`📊 Clases publicadas encontradas: ${clasesPublicadas.length}`);
+            
+            // ========== FILTRAR POR ÁREA DEL USUARIO ==========
             const userArea = user.area || null;
             
             console.log(`👤 Usuario: ${user.apellidoNombre}, Área: ${userArea || 'No definida'}`);
             
+            let clasesFiltradasPorArea = [];
+            
             if (userArea && userArea !== '') {
                 console.log(`🔍 Filtrando clases históricas para el área: "${userArea}"`);
                 
-                this.clasesHistoricas = todasClases.filter(clase => {
-                    // Si la clase no tiene área definida o es 'todas', se muestra (clase general)
+                clasesFiltradasPorArea = clasesPublicadas.filter(clase => {
                     if (!clase.area || clase.area === 'todas') {
-                        console.log(`✅ Clase general: ${clase.nombre}`);
                         return true;
                     }
-                    // Si el área de la clase coincide con el área del usuario
-                    const coincide = clase.area === userArea;
-                    if (coincide) {
-                        console.log(`✅ Clase específica: ${clase.nombre} (Área: ${clase.area})`);
-                    } else {
-                        console.log(`❌ Clase excluida: ${clase.nombre} (Área: ${clase.area}) - Usuario área: ${userArea}`);
-                    }
-                    return coincide;
+                    return clase.area === userArea;
                 });
             } else {
-                console.log('👤 Usuario sin área definida - Mostrando todas las clases históricas');
-                this.clasesHistoricas = todasClases;
+                console.log('👤 Usuario sin área definida - Mostrando todas las clases');
+                clasesFiltradasPorArea = clasesPublicadas;
             }
             
-            console.log(`✅ ${this.clasesHistoricas.length} clases publicadas cargadas (filtradas por área)`);
+            console.log(`📊 Clases filtradas por área: ${clasesFiltradasPorArea.length}`);
+            
+            // ✅ ========== FILTRAR CLASES CON MATERIAL Y FECHA DE CIERRE PASADA ==========
+            const ahora = new Date();
+            
+            this.clasesHistoricas = clasesFiltradasPorArea.filter(clase => {
+                // 1. Verificar que tenga material
+                const tieneMaterial = clase.materialEnlaces && clase.materialEnlaces.length > 0;
+                
+                // 2. Verificar que la fecha de cierre haya pasado
+                let fechaCierrePasada = false;
+                if (clase.fechaCierre) {
+                    const fechaCierre = new Date(clase.fechaCierre);
+                    fechaCierrePasada = fechaCierre < ahora;
+                }
+                
+                // Log para depuración
+                if (!tieneMaterial) {
+                    console.log(`📭 Clase sin material: ${clase.nombre}`);
+                } else if (!fechaCierrePasada) {
+                    console.log(`⏳ Clase con material pero fecha de cierre no pasada: ${clase.nombre} (cierre: ${new Date(clase.fechaCierre).toLocaleDateString('es-AR')})`);
+                } else {
+                    console.log(`✅ Clase disponible: ${clase.nombre} (${clase.materialEnlaces.length} enlaces)`);
+                }
+                
+                return tieneMaterial && fechaCierrePasada;
+            });
+            
+            console.log(`✅ ${this.clasesHistoricas.length} clases disponibles (con material y fecha de cierre pasada)`);
+            
+            // Verificar materialEnlaces en la primera clase
+            if (this.clasesHistoricas.length > 0) {
+                console.log('📎 Material en primera clase:', this.clasesHistoricas[0].materialEnlaces);
+            }
             
             this.procesarAnosDisponibles();
             this.llenarSelectorAnos();
@@ -342,44 +362,42 @@ class MaterialHistorico {
     }
 
     filtrarClasesPorMes() {
-    const selectClase = document.getElementById('claseSeleccionada');
-    const form = document.getElementById('materialHistoricoForm');
-    const sinClasesMensaje = document.getElementById('sinClasesMensaje');
-    const buscadorContainer = document.getElementById('buscadorClasesContainer');
-    
-    if (!this.anoSeleccionado || !this.mesSeleccionado) {
-        if (form) form.style.display = 'none';
+        const selectClase = document.getElementById('claseSeleccionada');
+        const form = document.getElementById('materialHistoricoForm');
+        const sinClasesMensaje = document.getElementById('sinClasesMensaje');
+        const buscadorContainer = document.getElementById('buscadorClasesContainer');
+        
+        if (!this.anoSeleccionado || !this.mesSeleccionado) {
+            if (form) form.style.display = 'none';
+            if (sinClasesMensaje) sinClasesMensaje.style.display = 'none';
+            if (buscadorContainer) buscadorContainer.style.display = 'none';
+            return;
+        }
+        
+        this.clasesFiltradas = this.clasesHistoricas.filter(clase => {
+            if (!clase.fechaClase) return false;
+            const fecha = new Date(clase.fechaClase);
+            const pasaAno = this.anoSeleccionado === 'todos' || fecha.getFullYear() === parseInt(this.anoSeleccionado);
+            const pasaMes = this.mesSeleccionado === 'todos' || fecha.getMonth() === parseInt(this.mesSeleccionado);
+            return pasaAno && pasaMes;
+        });
+        
+        console.log(`🔍 ${this.clasesFiltradas.length} clases encontradas (filtradas por año/mes)`);
+        
+        if (this.clasesFiltradas.length === 0) {
+            if (form) form.style.display = 'none';
+            if (buscadorContainer) buscadorContainer.style.display = 'none';
+            if (sinClasesMensaje) sinClasesMensaje.style.display = 'block';
+            return;
+        }
+        
         if (sinClasesMensaje) sinClasesMensaje.style.display = 'none';
-        if (buscadorContainer) buscadorContainer.style.display = 'none';
-        return;
+        if (form) form.style.display = 'block';
+        if (buscadorContainer) buscadorContainer.style.display = 'block';
+        
+        this.llenarSelectClases();
+        this.configurarBuscadorClases();
     }
-    
-    // Ya tenemos this.clasesHistoricas pre-filtradas por área
-    // Ahora aplicamos filtro adicional por año y mes
-    this.clasesFiltradas = this.clasesHistoricas.filter(clase => {
-        if (!clase.fechaClase) return false;
-        const fecha = new Date(clase.fechaClase);
-        const pasaAno = this.anoSeleccionado === 'todos' || fecha.getFullYear() === parseInt(this.anoSeleccionado);
-        const pasaMes = this.mesSeleccionado === 'todos' || fecha.getMonth() === parseInt(this.mesSeleccionado);
-        return pasaAno && pasaMes;
-    });
-    
-    console.log(`🔍 ${this.clasesFiltradas.length} clases encontradas (filtradas por año/mes sobre área restringida)`);
-    
-    if (this.clasesFiltradas.length === 0) {
-        if (form) form.style.display = 'none';
-        if (buscadorContainer) buscadorContainer.style.display = 'none';
-        if (sinClasesMensaje) sinClasesMensaje.style.display = 'block';
-        return;
-    }
-    
-    if (sinClasesMensaje) sinClasesMensaje.style.display = 'none';
-    if (form) form.style.display = 'block';
-    if (buscadorContainer) buscadorContainer.style.display = 'block';
-    
-    this.llenarSelectClases();
-    this.configurarBuscadorClases();
-}
 
     configurarBuscadorClases() {
         const buscador = document.getElementById('buscadorClases');
@@ -400,43 +418,53 @@ class MaterialHistorico {
     }
 
     llenarSelectClases() {
-        const select = document.getElementById('claseSeleccionada');
-        if (!select) return;
+    const select = document.getElementById('claseSeleccionada');
+    if (!select) return;
+    
+    select.innerHTML = '<option value="">Seleccione una clase</option>';
+    
+    this.clasesFiltradas.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    
+    this.clasesFiltradas.forEach(clase => {
+        const option = document.createElement('option');
+        option.value = clase._id;
         
-        select.innerHTML = '<option value="">Seleccione una clase</option>';
-        
-        this.clasesFiltradas.sort((a, b) => a.nombre.localeCompare(b.nombre));
-        
-        this.clasesFiltradas.forEach(clase => {
-            const option = document.createElement('option');
-            option.value = clase._id;
-            
-            let fechaTexto = '';
-            if (clase.fechaClase) {
-                const fecha = new Date(clase.fechaClase);
-                fechaTexto = fecha.toLocaleDateString('es-AR', {
-                    day: '2-digit', month: '2-digit', year: 'numeric',
-                    hour: '2-digit', minute: '2-digit', hour12: false
-                });
-            }
-            
-            option.textContent = `${clase.nombre} (${fechaTexto})`;
-            option.dataset.nombre = clase.nombre;
-            option.dataset.descripcion = clase.descripcion || '';
-            option.dataset.fecha = clase.fechaClase;
-            option.dataset.youtube = clase.enlaces?.youtube || '';
-            option.dataset.powerpoint = clase.enlaces?.powerpoint || '';
-            option.dataset.instructores = clase.instructores?.join(', ') || '';
-            
-            select.appendChild(option);
-        });
-        
-        const buscador = document.getElementById('buscadorClases');
-        if (buscador) {
-            buscador.value = '';
-            this.filtrarListaClases('');
+        let fechaTexto = '';
+        if (clase.fechaClase) {
+            const fecha = new Date(clase.fechaClase);
+            fechaTexto = fecha.toLocaleDateString('es-AR', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: false
+            });
         }
+        
+        // Todas las clases que llegan aquí ya tienen material y fecha de cierre pasada
+        const materialEnlaces = clase.materialEnlaces || [];
+        const tieneMaterial = materialEnlaces.length > 0;
+        
+        // Todas deberían tener material, pero lo verificamos
+        if (!tieneMaterial) {
+            option.disabled = true;
+            option.textContent = `📭 ${clase.nombre} (${fechaTexto}) - Sin material disponible`;
+        } else {
+            option.textContent = `📎 ${clase.nombre} (${fechaTexto})`;
+        }
+        
+        option.dataset.nombre = clase.nombre;
+        option.dataset.descripcion = clase.descripcion || '';
+        option.dataset.fecha = clase.fechaClase;
+        option.dataset.materialEnlaces = JSON.stringify(materialEnlaces);
+        option.dataset.instructores = clase.instructores?.join(', ') || '';
+        
+        select.appendChild(option);
+    });
+    
+    const buscador = document.getElementById('buscadorClases');
+    if (buscador) {
+        buscador.value = '';
+        this.filtrarListaClases('');
     }
+}
 
     async procesarSolicitud() {
         const claseId = document.getElementById('claseSeleccionada').value;
@@ -451,17 +479,22 @@ class MaterialHistorico {
             return;
         }
 
+        // ✅ Obtener materialEnlaces del dataset
+        const materialEnlaces = JSON.parse(selectOption.dataset.materialEnlaces || '[]');
+        
         const claseData = {
             id: claseId,
             nombre: selectOption.dataset.nombre,
             descripcion: selectOption.dataset.descripcion,
             fecha: selectOption.dataset.fecha,
-            youtube: selectOption.dataset.youtube,
-            powerpoint: selectOption.dataset.powerpoint,
+            materialEnlaces: materialEnlaces,
             instructores: selectOption.dataset.instructores
         };
 
-        // Guardar y mostrar (independientemente del servidor)
+        console.log('📋 Clase seleccionada:', claseData);
+        console.log('📎 materialEnlaces:', materialEnlaces);
+
+        // Guardar y mostrar
         await this.guardarSolicitudLocal(claseData);
         this.mostrarMaterial(claseData);
     }
@@ -472,8 +505,10 @@ class MaterialHistorico {
 
         const solicitud = {
             claseId: claseData.id,
+            claseNombre: claseData.nombre,
             fechaClase: claseData.fecha,
-            fechaSolicitud: new Date().toISOString()
+            fechaSolicitud: new Date().toISOString(),
+            materialEnlaces: claseData.materialEnlaces
         };
 
         // Guardar en localStorage
@@ -506,7 +541,7 @@ class MaterialHistorico {
             };
 
             const url = `${window.location.origin}/api/material-historico/solicitudes`;
-            console.log('📤 Enviando solicitud a:', url);
+            console.log('📤 Enviando solicitud al servidor:', url);
 
             const response = await fetch(url, {
                 method: 'POST',
@@ -514,7 +549,7 @@ class MaterialHistorico {
                     'Content-Type': 'application/json',
                     'user-id': user._id
                 },
-                body: JSON.stringify(solicitud)
+                body: JSON.stringify(data)
             });
 
             console.log('📥 Respuesta status:', response.status);
@@ -547,6 +582,9 @@ class MaterialHistorico {
         const linksContainer = document.getElementById('linksContainer');
         
         if (!materialLinks || !claseNombre || !linksContainer) return;
+        
+        console.log('📎 Mostrando material para:', claseData.nombre);
+        console.log('📎 Enlaces:', claseData.materialEnlaces);
         
         let fechaFormateada = '';
         if (claseData.fecha) {
@@ -585,26 +623,31 @@ class MaterialHistorico {
             document.getElementById('claseInfo')?.appendChild(instructoresElem);
         }
         
+        // ✅ Mostrar enlaces de material desde materialEnlaces
         linksContainer.innerHTML = '';
-        if (claseData.youtube) {
-            linksContainer.innerHTML += `
-                <div class="link-card youtube" onclick="window.open('${claseData.youtube}', '_blank')">
-                    <a href="${claseData.youtube}" target="_blank">
-                        <div class="icon">▶️</div>
-                        <div class="title">YouTube</div>
-                        <div class="subtitle">Ver grabación de la clase</div>
-                    </a>
-                </div>
-            `;
-        }
-        if (claseData.powerpoint) {
-            linksContainer.innerHTML += `
-                <div class="link-card powerpoint" onclick="window.open('${claseData.powerpoint}', '_blank')">
-                    <a href="${claseData.powerpoint}" target="_blank">
-                        <div class="icon">📊</div>
-                        <div class="title">PowerPoint</div>
-                        <div class="subtitle">Descargar presentación</div>
-                    </a>
+        const materialEnlaces = claseData.materialEnlaces || [];
+        
+        if (materialEnlaces.length > 0) {
+            materialEnlaces.forEach((enlace, index) => {
+                const tipo = this.detectarTipoEnlace(enlace.url);
+                const icono = tipo === 'youtube' ? '▶️' : tipo === 'drive' ? '📊' : '🔗';
+                const titulo = tipo === 'youtube' ? 'YouTube' : tipo === 'drive' ? 'Google Drive' : 'Enlace';
+                const subtitulo = tipo === 'youtube' ? 'Ver grabación de la clase' : tipo === 'drive' ? 'Ver presentación' : 'Ver material';
+                
+                linksContainer.innerHTML += `
+                    <div class="link-card ${tipo}" onclick="window.open('${enlace.url}', '_blank')">
+                        <a href="${enlace.url}" target="_blank">
+                            <div class="icon">${icono}</div>
+                            <div class="title">${titulo} ${index + 1}</div>
+                            <div class="subtitle">${subtitulo}</div>
+                        </a>
+                    </div>
+                `;
+            });
+        } else {
+            linksContainer.innerHTML = `
+                <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+                    No hay material disponible para esta clase.
                 </div>
             `;
         }
@@ -624,6 +667,20 @@ class MaterialHistorico {
         
         materialLinks.classList.add('visible');
         this.mostrarMensaje('✅ Material disponible', 'success');
+    }
+
+    detectarTipoEnlace(url) {
+        if (!url) return 'link';
+        
+        if (url.includes('youtube.com') || url.includes('youtu.be')) {
+            return 'youtube';
+        }
+        
+        if (url.includes('drive.google.com') || url.includes('docs.google.com')) {
+            return 'drive';
+        }
+        
+        return 'link';
     }
 
     ocultarMaterial() {
@@ -712,66 +769,62 @@ class MaterialHistorico {
     }
 
     mostrarMisSolicitudes() {
-    const tbody = document.querySelector('#tablaMisSolicitudes tbody');
-    if (!tbody) return;
-    
-    tbody.innerHTML = '';
+        const tbody = document.querySelector('#tablaMisSolicitudes tbody');
+        if (!tbody) return;
+        
+        tbody.innerHTML = '';
 
-    if (this.solicitudes.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #666; padding: 20px;">
-            Todavía no has solicitado material de clases grabadas.
-        </td></tr>`;
-        return;
+        if (this.solicitudes.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #666; padding: 20px;">
+                Todavía no has solicitado material de clases grabadas.
+            </td></tr>`;
+            return;
+        }
+
+        this.solicitudes.forEach(solicitud => {
+            const usuario = solicitud.usuario || {};
+            const clase = solicitud.clase || {};
+            
+            const fechaClase = clase.fechaClase ? 
+                new Date(clase.fechaClase).toLocaleDateString('es-AR', {
+                    day: '2-digit', month: '2-digit', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit', hour12: false
+                }) : 'Fecha no disponible';
+            
+            const fechaSolicitud = solicitud.fechaSolicitud ? 
+                new Date(solicitud.fechaSolicitud).toLocaleString('es-AR', {
+                    hour12: false
+                }) : 'Fecha no disponible';
+            
+            // ✅ Obtener enlaces de la clase desde materialEnlaces
+            const materialEnlaces = clase.materialEnlaces || [];
+            
+            const materialHTML = this.generarMaterialHTML(materialEnlaces);
+            
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${clase.nombre || solicitud.claseNombre || 'N/A'}</td>
+                <td>${fechaClase}</td>
+                <td>${fechaSolicitud}</td>
+                <td class="material-badge">${materialHTML}</td>
+            `;
+            tbody.appendChild(row);
+        });
     }
 
-    // ✅ Ahora los datos vienen con 'usuario' y 'clase' poblados
-    this.solicitudes.forEach(solicitud => {
-        // Obtener datos de las referencias
-        const usuario = solicitud.usuario || {};
-        const clase = solicitud.clase || {};
+    generarMaterialHTML(materialEnlaces) {
+        if (!materialEnlaces || materialEnlaces.length === 0) {
+            return '<span style="color: #666; font-style: italic;">Material disponible</span>';
+        }
         
-        const fechaClase = clase.fechaClase ? 
-            new Date(clase.fechaClase).toLocaleDateString('es-AR', {
-                day: '2-digit', month: '2-digit', year: 'numeric',
-                hour: '2-digit', minute: '2-digit', hour12: false
-            }) : 'Fecha no disponible';
+        const enlaces = materialEnlaces.map((enlace, index) => {
+            const tipo = this.detectarTipoEnlace(enlace.url);
+            const icono = tipo === 'youtube' ? '▶️' : tipo === 'drive' ? '📊' : '🔗';
+            return `<a href="${enlace.url}" target="_blank" title="Ver material ${index + 1}">${icono} Enlace ${index + 1}</a>`;
+        });
         
-        const fechaSolicitud = solicitud.fechaSolicitud ? 
-            new Date(solicitud.fechaSolicitud).toLocaleString('es-AR', {
-                hour12: false
-            }) : 'Fecha no disponible';
-        
-        // ✅ Obtener enlaces de la clase
-        const youtube = clase.enlaces?.youtube || '';
-        const powerpoint = clase.enlaces?.powerpoint || '';
-        
-        const materialHTML = this.generarMaterialHTML({ youtube, powerpoint });
-        
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${clase.nombre || 'N/A'}</td>
-            <td>${fechaClase}</td>
-            <td>${fechaSolicitud}</td>
-            <td class="material-badge">${materialHTML}</td>
-        `;
-        tbody.appendChild(row);
-    });
-}
-
-    generarMaterialHTML(enlaces) {
-    // ✅ Recibe un objeto con youtube y powerpoint
-    const enlacesArray = [];
-    if (enlaces.youtube) {
-        enlacesArray.push(`<a href="${enlaces.youtube}" target="_blank" title="Ver en YouTube">▶️ YouTube</a>`);
+        return enlaces.join(' | ');
     }
-    if (enlaces.powerpoint) {
-        enlacesArray.push(`<a href="${enlaces.powerpoint}" target="_blank" title="Ver presentación">📊 Presentacion</a>`);
-    }
-    if (enlacesArray.length === 0) {
-        return '<span style="color: #666;">Material disponible</span>';
-    }
-    return enlacesArray.join(' | ');
-}
 
     mostrarMensaje(mensaje, tipo) {
         const msgDiv = document.getElementById('statusMessage');
