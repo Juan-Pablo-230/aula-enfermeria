@@ -423,7 +423,12 @@ class MaterialHistorico {
     
     select.innerHTML = '<option value="">Seleccione una clase</option>';
     
-    this.clasesFiltradas.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    // ✅ Ordenar por fecha de clase DESCENDENTE (más reciente primero)
+    this.clasesFiltradas.sort((a, b) => {
+        const fechaA = a.fechaClase ? new Date(a.fechaClase).getTime() : 0;
+        const fechaB = b.fechaClase ? new Date(b.fechaClase).getTime() : 0;
+        return fechaB - fechaA;
+    });
     
     this.clasesFiltradas.forEach(clase => {
         const option = document.createElement('option');
@@ -769,48 +774,72 @@ class MaterialHistorico {
     }
 
     mostrarMisSolicitudes() {
-        const tbody = document.querySelector('#tablaMisSolicitudes tbody');
-        if (!tbody) return;
-        
-        tbody.innerHTML = '';
+    const tbody = document.querySelector('#tablaMisSolicitudes tbody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '';
 
-        if (this.solicitudes.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #666; padding: 20px;">
-                Todavía no has solicitado material de clases grabadas.
-            </td></tr>`;
-            return;
-        }
-
-        this.solicitudes.forEach(solicitud => {
-            const usuario = solicitud.usuario || {};
-            const clase = solicitud.clase || {};
-            
-            const fechaClase = clase.fechaClase ? 
-                new Date(clase.fechaClase).toLocaleDateString('es-AR', {
-                    day: '2-digit', month: '2-digit', year: 'numeric',
-                    hour: '2-digit', minute: '2-digit', hour12: false
-                }) : 'Fecha no disponible';
-            
-            const fechaSolicitud = solicitud.fechaSolicitud ? 
-                new Date(solicitud.fechaSolicitud).toLocaleString('es-AR', {
-                    hour12: false
-                }) : 'Fecha no disponible';
-            
-            // ✅ Obtener enlaces de la clase desde materialEnlaces
-            const materialEnlaces = clase.materialEnlaces || [];
-            
-            const materialHTML = this.generarMaterialHTML(materialEnlaces);
-            
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${clase.nombre || solicitud.claseNombre || 'N/A'}</td>
-                <td>${fechaClase}</td>
-                <td>${fechaSolicitud}</td>
-                <td class="material-badge">${materialHTML}</td>
-            `;
-            tbody.appendChild(row);
-        });
+    if (this.solicitudes.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #666; padding: 20px;">
+            Todavía no has solicitado material de clases grabadas.
+        </td></tr>`;
+        return;
     }
+
+    this.solicitudes.forEach(solicitud => {
+        const usuario = solicitud.usuario || {};
+        const clase = solicitud.clase || {};
+        
+        const fechaClase = clase.fechaClase ? 
+            new Date(clase.fechaClase).toLocaleDateString('es-AR', {
+                day: '2-digit', 
+                month: '2-digit', 
+                year: 'numeric',
+                hour: '2-digit', 
+                minute: '2-digit', 
+                hour12: false
+            }) : 'Fecha no disponible';
+        
+        const fechaSolicitud = solicitud.fechaSolicitud ? 
+            new Date(solicitud.fechaSolicitud).toLocaleString('es-AR', {
+                day: '2-digit', 
+                month: '2-digit', 
+                year: 'numeric',
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: false
+            }) : 'Fecha no disponible';
+        
+        // ✅ Obtener enlaces de material
+        const materialEnlaces = clase.materialEnlaces || solicitud.materialEnlaces || [];
+        
+        let materialHTML = '';
+        if (materialEnlaces.length === 0) {
+            materialHTML = '<span class="sin-material">📭 Sin material</span>';
+        } else {
+            // ✅ Mostrar TODOS los enlaces con sus íconos
+            const enlacesHTML = materialEnlaces.map((enlace, index) => {
+                const tipo = this.detectarTipoEnlace(enlace.url);
+                const icono = tipo === 'youtube' ? '▶️' : 
+                              tipo === 'drive' ? '📊' : 
+                              tipo === 'link' ? '🔗' : '📎';
+                return `<a href="${enlace.url}" target="_blank" title="Ver material ${index + 1}">${icono} ${index + 1}</a>`;
+            }).join('');
+            
+            materialHTML = enlacesHTML;
+        }
+        
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${clase.nombre || solicitud.claseNombre || 'N/A'}</td>
+            <td>${fechaClase}</td>
+            <td>${fechaSolicitud}</td>
+            <td><div class="material-badge">${materialHTML}</div></td>
+        `;
+        tbody.appendChild(row);
+    });
+}
 
     generarMaterialHTML(materialEnlaces) {
         if (!materialEnlaces || materialEnlaces.length === 0) {

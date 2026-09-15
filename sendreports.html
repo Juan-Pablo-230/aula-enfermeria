@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reportar un Error</title>
+    <link rel="stylesheet" href="/css/sendreports.css">
+    <link rel="shortcut icon" href="/img/logo.png" type="image/x-icon">
+</head>
+<body class="sendreports-body iframe-mode">
+    <div class="sendreports-container" style="max-width: 100%; height: 100vh; border-radius: 0; border: none; box-shadow: none;">
+        <div class="sendreports-header">
+            <div class="sendreports-icon">🐛</div>
+            <h1>Reportar un Error</h1>
+            <p>Ayudanos a mejorar el sistema reportando cualquier problema que encuentres</p>
+            <button class="sendreports-close" id="btnCloseReport" title="Cerrar">&times;</button>
+        </div>
+
+        <div id="sendreportsMensaje" class="sendreports-mensaje" style="display: none;"></div>
+
+        <form id="sendreportForm" class="sendreports-form">
+            <input type="hidden" id="reportUserId" value="">
+            <input type="hidden" id="reportUserEmail" value="">
+
+            <div class="sendreports-group">
+                <label for="reportTitle">
+                    <span class="label-icon">📌</span>
+                    Título del problema *
+                </label>
+                <input
+                    type="text"
+                    id="reportTitle"
+                    name="title"
+                    required
+                    maxlength="100"
+                    placeholder="Ej: No puedo inscribirme a una clase"
+                    autocomplete="off"
+                >
+                <small class="sendreports-hint">Breve descripción del problema (máx. 100 caracteres)</small>
+            </div>
+
+            <div class="sendreports-group">
+                <label for="reportDescription">
+                    <span class="label-icon">📝</span>
+                    Descripción detallada *
+                </label>
+                <textarea
+                    id="reportDescription"
+                    name="description"
+                    rows="5"
+                    required
+                    maxlength="2000"
+                    placeholder="Describe detalladamente qué estabas haciendo cuando ocurrió el error..."
+                ></textarea>
+                <small class="sendreports-hint">
+                    <span id="descriptionCounter">0</span>/2000 caracteres
+                </small>
+            </div>
+
+            <div class="sendreports-group">
+                <label for="reportSteps">
+                    <span class="label-icon">🔁</span>
+                    Pasos para reproducir (opcional)
+                </label>
+                <textarea
+                    id="reportSteps"
+                    name="steps"
+                    rows="3"
+                    maxlength="1000"
+                    placeholder="1. Hice clic en...&#10;2. Luego seleccioné...&#10;3. Apareció el error..."
+                ></textarea>
+            </div>
+
+            <div class="sendreports-actions">
+                <button type="submit" class="sendreports-btn submit" id="sendreportSubmitBtn">
+                    📤 Enviar reporte
+                </button>
+                <button type="button" class="sendreports-btn cancel" id="btnCancelReport">
+                    ❌ Cancelar
+                </button>
+            </div>
+        </form>
+
+        <div class="sendreports-footer">
+            <p>Tu reporte será revisado por el equipo de soporte técnico.</p>
+        </div>
+    </div>
+
+    <script src="/logs/browser-logger.js"></script>
+    <script src="/js/sendreports.js"></script>
+</body>
+</html>
